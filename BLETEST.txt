@@ -1,0 +1,270 @@
+#!/usr/bin/python
+#--------------------------------------
+#    ___  ___  _ ____
+#   / _ \/ _ \(_) __/__  __ __
+#  / , _/ ___/ /\ \/ _ \/ // /
+# /_/|_/_/  /_/___/ .__/\_, /
+#                /_/   /___/
+#
+#  lcd_i2c.py
+#  LCD test script using I2C backpack.
+#  Supports 16x2 and 20x4 screens.
+#
+# Author : Matt Hawkins
+# Date   : 20/09/2015
+#
+# http://www.raspberrypi-spy.co.uk/
+#
+# Copyright 2015 Matt Hawkins
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+#--------------------------------------
+
+import smbus
+import time
+import serial
+import re
+import string
+import os
+import socket
+from bluetooth import *
+
+
+server_sock = BluetoothSocket(RFCOMM)
+server_sock.bind(("",PORT_ANY))
+server_sock.listen(1)
+server_sock.settimeout(3)
+    
+port = server_sock.getsockname()[1]
+
+uuid = "94f39d29-7d6d-437d-973b-fba39e49d4ee"
+    
+advertise_service(server_sock, "RSRP Test Server", service_id = uuid, service_classes = [ uuid, SERIAL_PORT_CLASS ], profiles = [ SERIAL_PORT_PROFILE ], )
+
+Port = ""
+DataAnt0 = ""
+DataAnt1 = ""
+state = 0
+
+# Define some device parameters
+I2C_ADDR  = 0x27 # I2C device address
+LCD_WIDTH = 16   # Maximum characters per line
+
+# Define some device constants
+LCD_CHR = 1 # Mode - Sending data
+LCD_CMD = 0 # Mode - Sending command
+
+LCD_LINE_1 = 0x80 # LCD RAM address for the 1st line
+LCD_LINE_2 = 0xC0 # LCD RAM address for the 2nd line
+LCD_LINE_3 = 0x94 # LCD RAM address for the 3rd line
+LCD_LINE_4 = 0xD4 # LCD RAM address for the 4th line
+
+LCD_BACKLIGHT  = 0x08  # On
+#LCD_BACKLIGHT = 0x00  # Off
+
+ENABLE = 0b00000100 # Enable bit
+
+# Timing constants
+E_PULSE = 0.0005
+E_DELAY = 0.0005
+
+#Open I2C interface
+#bus = smbus.SMBus(0)  # Rev 1 Pi uses 0
+bus = smbus.SMBus(1) # Rev 2 Pi uses 1
+
+def lcd_init():
+  # Initialise display
+  lcd_byte(0x33,LCD_CMD) # 110011 Initialise
+  lcd_byte(0x32,LCD_CMD) # 110010 Initialise
+  lcd_byte(0x06,LCD_CMD) # 000110 Cursor move direction
+  lcd_byte(0x0C,LCD_CMD) # 001100 Display On,Cursor Off, Blink Off 
+  lcd_byte(0x28,LCD_CMD) # 101000 Data length, number of lines, font size
+  lcd_byte(0x01,LCD_CMD) # 000001 Clear display
+  time.sleep(E_DELAY)
+
+def lcd_byte(bits, mode):
+  # Send byte to data pins
+  # bits = the data
+  # mode = 1 for data
+  #        0 for command
+
+  bits_high = mode | (bits & 0xF0) | LCD_BACKLIGHT
+  bits_low = mode | ((bits<<4) & 0xF0) | LCD_BACKLIGHT
+
+  # High bits
+  bus.write_byte(I2C_ADDR, bits_high)
+  lcd_toggle_enable(bits_high)
+
+  # Low bits
+  bus.write_byte(I2C_ADDR, bits_low)
+  lcd_toggle_enable(bits_low)
+
+def lcd_toggle_enable(bits):
+  # Toggle enable
+  time.sleep(E_DELAY)
+  bus.write_byte(I2C_ADDR, (bits | ENABLE))
+  time.sleep(E_PULSE)
+  bus.write_byte(I2C_ADDR,(bits & ~ENABLE))
+  time.sleep(E_DELAY)
+
+def lcd_string(message,line):
+  # Send string to display
+
+  message = message.ljust(LCD_WIDTH," ")
+
+  lcd_byte(line, LCD_CMD)
+
+  for i in range(LCD_WIDTH):
+    lcd_byte(ord(message[i]),LCD_CHR)
+
+def Portdisconnect():
+    #lcd_string("Port State :",LCD_LINE_1)
+    #lcd_string("   Disconnected!",LCD_LINE_2)
+    print "PortDisconnect"
+
+def PortConnect():
+    global Port
+    num = 10
+    try :
+        for count in range (-1, num, 1) :
+            if os.path.exists("/dev/ttyACM" + str(count)):
+                Port = serial.Serial("/dev/ttyACM" + str(count),115200)
+                #lcd_string("Port State : ",LCD_LINE_1)
+                #lcd_string("    Connected..!",LCD_LINE_2)
+                return Port
+    except :
+        Portdisconnect()
+        Port = ""
+        return Port
+
+def WriteAT():
+    global DataAnt0
+    global DataAnt1
+    try :
+        Port.write(("AT\n").encode("utf-8"))
+        atrespone = Port.readline()
+        atrespone1 = Port.readline()
+        atrespone2 = Port.readline()
+        atrespone3 = Port.readline()
+        findtxt = "OK"
+        if findtxt in atrespone3 :
+            Port.write(('AT%MEAS="20"\n').encode("UTF-8"))
+            respone = Port.readline()
+            num = 2
+            i = 0
+            while num > i :
+                #lcd_string("RSRP Reading..",LCD_LINE_1)
+                #lcd_string("   Please Wait..",LCD_LINE_2)
+                respone = Port.readline()
+                data0 = "RSRP:" + respone[22:25]
+                data1 = "Ant0:" + respone[33:36] + "Ant1:" + respone[44:47]
+                if respone[22:27] == "-1000" :
+                    #lcd_string("Please Wait",LCD_LINE_1)
+                    time.sleep(0.1)
+                elif respone[22:25] != "" and respone[33:36] != "" and respone[44:47] != "" :
+                    #lcd_string(data0,LCD_LINE_1)
+                    #lcd_string(data1,LCD_LINE_2)
+                    DataAnt0 = "RSRP:" + respone[22:25] +"   "+ "Ant0:" + respone[33:36] +"   "+ "Ant1:" + respone[44:47]
+                    i += 1
+                    time.sleep(1)
+                    return DataAnt0
+                else :
+                    i += 1
+                    time.sleep(0.5)
+        else : 
+            Portdisconnect()
+    except :
+        Portdisconnect()
+
+def main() :
+#    lcd_init()
+    print "Main"
+
+
+#lcd_init()
+
+while True :
+    PortConnect()
+    time.sleep(0.5)
+    WriteAT()
+    time.sleep(0.5)
+    #data = client_sock.recv(1024)
+    #print ("receved data is : %s " % data)
+    try :
+       # client_sock, client_info = server_sock.accept()
+        try :
+            #client_sock, client_info = server_sock.accept()
+            if state == 0 :
+                try :
+                    client_sock, client_info = server_sock.accept()
+                    time.sleep(1)
+                    if DataAnt1 != DataAnt0 :
+                        client_sock.send(DataAnt0 + "\n")
+                        print "State : 0"
+                        #DataAnt0 = 0
+                        DataAnt1 = DataAnt0
+                        state = 1
+                        print (state)
+                    else :
+                        continue
+                except :
+                    state = 0
+                    print "state 0 error"
+                    'client_sock.send("state 0 Error\n")'
+                    continue  
+            if state == 1 :
+                try :
+                    #client_sock, client_info = server_sock.accept()
+                    time.sleep(1)
+                    if DataAnt1 != DataAnt0 :
+                        client_sock.send(DataAnt0 + "\n")
+                        print "State : 1"
+                        #DataAnt0 = 0
+                        DataAnt1= DataAnt0
+                        print (state)
+                    else :
+                        continue
+                except :
+                    state = 0
+                    print "state1 error"
+                    continue
+            else :
+                state = 0
+                print "state Error"
+                continue
+        except :
+            print "Error"
+            continue
+    except BluetoothError as e :
+        err = e.args[0]
+        if err == "timed out" :
+            time.sleep(0.5)
+            print "recv timed out, retry later"
+            state = 0
+            pass
+        else :
+            print e
+            state = 0
+            pass  
+    
+if __name__ == '__main__':
+
+  try:
+    main()
+  except KeyboardInterrupt:
+    pass
+  finally:
+    lcd_byte(0x01, LCD_CMD)
+
