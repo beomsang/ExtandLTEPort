@@ -1,0 +1,119 @@
+import smbus
+import time
+import serial
+import re
+import string
+import os
+import socket
+import threading
+import sys
+import RPi.GPIO as GPIO
+
+#COMPort and Meter Parameter default Value
+COMPort = serial.Serial("/dev/ttyAMA0",115200)
+Port = ""
+state = 1
+
+#Thread Data Parameter
+newdata = ""
+
+#GPIO Setting
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(17,GPIO.OUT)
+GPIO.output(17,0)
+GPIO.setup(27,GPIO.OUT)
+GPIO.output(27,0)
+GPIO.setup(22,GPIO.OUT)
+GPIO.output(22,0)
+
+#Server Parameter Setting
+ServerHost = "192.168.1.110"
+ServerPort = 12345
+
+server = socket.socket(socket.AF_INEF, socket.SOCK_STREAM)
+server.connect((ServerHost,ServerPort))
+server.settimeout(3)
+
+
+def Port_Search(data) :
+    global Port
+    global state
+
+    if data == "run" :
+        num = 99
+        try :
+            if state == 1 :
+                for count in range (-1, num, 1) :
+                    state = 0
+                    if os.path.exists("/dev/ttyACM"+str(count)) :
+                        GPIO.output(17,0)
+                        GPIO.output(27,0)
+                        GPIO.output(22,1)
+                        time.sleep(1)
+                        Port = serial.Serial("/dev/ttyACM" + str(count), 115200)
+                        if Port != "" :
+                            break
+                        if count == 99 :
+                            Port_disconnect("run")
+            else :
+                pass
+        except :
+            time.sleep(1)
+            Port_disconnect("run")
+
+
+def Port_disconnect(data) :
+    global Port
+    global state
+    global COMPort
+
+    if data == "run" :
+        GPIO.output(22,0)
+        GPIO.output(27,0)
+        GPIO.output(17,1)
+        Port = ""
+        state = 1
+        time.sleep(1)
+        Port_Search("run")
+
+def readThread() :
+    global COMPort
+    global Port
+
+    while True :
+        try :
+            while True :
+                GPIO.output(17,0)
+                GPIO.output(22,0)
+                GPIO.output(27,1)
+                data = Port.read()
+                COMPort.writelines(data)
+        except :
+            Port_disconnect("run")
+            continue
+
+
+def readCOMThread() :
+    global Port
+    global COMPort
+
+    while True :
+        try :
+            while True :
+                data = COMPort.read()
+                Port.writelines(data)
+        except :
+            Port_disconnect("run")
+            pass
+
+
+
+
+#Thread Run after Boonting 
+thread = threading.Thread(target = readThread, args=())
+thread.start()
+thread1. threading.Thread(target = readCOMThread, args=())
+thread1.start()
+    
+                        
+                        
